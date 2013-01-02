@@ -2,8 +2,8 @@
  * This code was written by de4dot@gmail.com but is placed in the public domain.
  * Use at your own risk. You don't need to credit me, but it wouldn't hurt either. :)
  * 
- * It uses undocumented implementation features of Microsoft's .NET implementation
- * and could fail to work at any time. Most likely when you're sleeping.
+ * It uses undocumented features of Microsoft's CLR to prevent managed debuggers
+ * from working and could fail to work at any time. Most likely when you're sleeping.
  * 
  * Official site: https://bitbucket.org/0xd4d/antinet
  */
@@ -36,31 +36,31 @@ namespace antinet {
 		class Info {
 			/// <summary>
 			/// Offset in <c>Debugger</c> of pointer to <c>DebuggerRCThread</c>.
-			/// See Debugger::Startup() (after creating DebuggerRCThread).
+			/// See <c>Debugger::Startup()</c> (after creating DebuggerRCThread).
 			/// </summary>
 			public int Debugger_pDebuggerRCThread;
 
 			/// <summary>
 			/// Offset in <c>Debugger</c> of the <c>pid</c>.
-			/// See Debugger::Debugger().
+			/// See <c>Debugger::Debugger()</c>.
 			/// </summary>
 			public int Debugger_pid;
 
 			/// <summary>
 			/// Offset in <c>DebuggerRCThread</c> of pointer to <c>Debugger</c>.
-			/// See DebuggerRCThread::DebuggerRCThread().
+			/// See <c>DebuggerRCThread::DebuggerRCThread()</c>.
 			/// </summary>
 			public int DebuggerRCThread_pDebugger;
 
 			/// <summary>
 			/// Offset in <c>DebuggerRCThread</c> of keep-looping boolean (1 byte).
-			/// See Debugger::StopDebugger() or one of the first methods it calls.
+			/// See <c>Debugger::StopDebugger()</c> or one of the first methods it calls.
 			/// </summary>
 			public int DebuggerRCThread_shouldKeepLooping;
 
 			/// <summary>
 			/// Offset in <c>DebuggerRCThread</c> of event to signal to wake it up.
-			/// See Debugger::StopDebugger() or one of the first methods it calls.
+			/// See <c>Debugger::StopDebugger()</c> or one of the first methods it calls.
 			/// </summary>
 			public int DebuggerRCThread_hEvent1;
 		}
