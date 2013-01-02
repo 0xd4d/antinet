@@ -20,8 +20,8 @@ namespace antinet {
 	/// implementation (for the desktop) that is used. The only currently supported
 	/// versions are .NET Framework 2.0 - 4.5 (CLR 2.0 and CLR 4.0).
 	/// It prevents debugging by killing the .NET debugger thread. When it's killed,
-	/// any debugger will fail to connect and any connected debugger will fail to
-	/// receive any debugger messages.
+	/// any connected debugger, or any debugger that connects, will fail to receive
+	/// any debug messages.
 	/// </summary>
 	public static class AntiManagedDebugger {
 		[DllImport("kernel32", CharSet = CharSet.Auto)]
@@ -129,11 +129,10 @@ namespace antinet {
 			if (pDebuggerRCThread == IntPtr.Zero)
 				return false;
 
-			// Let's do this
+			// Signal debugger thread to quit
 			*((byte*)pDebuggerRCThread + info.DebuggerRCThread_shouldKeepLooping) = 0;
 			IntPtr hEvent = *(IntPtr*)((byte*)pDebuggerRCThread + info.DebuggerRCThread_hEvent1);
-			bool b = SetEvent(hEvent);
-			return true;
+			return SetEvent(hEvent);
 		}
 
 		/// <summary>
@@ -200,19 +199,11 @@ namespace antinet {
 
 						return pDebuggerRCThread;
 					}
-					catch (SEHException) {
-					}
-					catch (AccessViolationException) {
-					}
-					catch (NullReferenceException) {
+					catch {
 					}
 				}
 			}
-			catch (SEHException) {
-			}
-			catch (AccessViolationException) {
-			}
-			catch (NullReferenceException) {
+			catch {
 			}
 
 			return IntPtr.Zero;
