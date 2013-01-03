@@ -129,10 +129,11 @@ namespace antinet {
 			if (pDebuggerRCThread == IntPtr.Zero)
 				return false;
 
-			// Signal debugger thread to quit
+			// Signal debugger thread to exit
 			*((byte*)pDebuggerRCThread + info.DebuggerRCThread_shouldKeepLooping) = 0;
 			IntPtr hEvent = *(IntPtr*)((byte*)pDebuggerRCThread + info.DebuggerRCThread_hEvent1);
-			return SetEvent(hEvent);
+			SetEvent(hEvent);
+			return true;
 		}
 
 		/// <summary>
