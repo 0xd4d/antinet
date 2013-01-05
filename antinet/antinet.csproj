@@ -37,6 +37,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="AntiManagedDebugger.cs" />
+    <Compile Include="AntiManagedProfiler.cs" />
     <Compile Include="HandleProcessCorruptedStateExceptionsAttribute.cs" />
     <Compile Include="PEInfo.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
