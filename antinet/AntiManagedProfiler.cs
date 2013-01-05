@@ -262,16 +262,16 @@ namespace antinet {
 					for (; p < end; p++) {
 						IntPtr addr;
 
-						//	A1 xx xx xx xx		mov eax,[mem]
-						//	83 F8 04			cmp eax,4
+						// A1 xx xx xx xx		mov eax,[mem]
+						// 83 F8 04				cmp eax,4
 						if (*p == 0xA1 && p[5] == 0x83 && p[6] == 0xF8 && p[7] == 0x04) {
 							if (IntPtr.Size == 4)
 								addr = new IntPtr((void*)*(uint*)(p + 1));
 							else
 								addr = new IntPtr((void*)(p + 5 + *(int*)(p + 1)));
 						}
-						//	8B 05 xx xx xx xx	mov eax,[mem]
-						//	83 F8 04			cmp eax,4
+						// 8B 05 xx xx xx xx	mov eax,[mem]
+						// 83 F8 04				cmp eax,4
 						else if (*p == 0x8B && p[1] == 0x05 && p[6] == 0x83 && p[7] == 0xF8 && p[8] == 0x04) {
 							if (IntPtr.Size == 4)
 								addr = new IntPtr((void*)*(uint*)(p + 2));
