@@ -20,13 +20,10 @@ namespace antinet {
 	/// implementation (for the desktop) that is used. The only currently supported
 	/// versions are .NET Framework 2.0 - 4.5 (CLR 2.0 and CLR 4.0).
 	/// It prevents debugging by killing the .NET debugger thread. When it's killed,
-	/// any connected debugger, or any debugger that connects, will fail to receive
-	/// any debug messages.
+	/// any connected managed debugger, or any managed debugger that connects, will
+	/// fail to receive any debug messages.
 	/// </summary>
 	public static class AntiManagedDebugger {
-		[DllImport("kernel32", CharSet = CharSet.Auto)]
-		static extern IntPtr GetModuleHandle(string name);
-
 		[DllImport("kernel32", CharSet = CharSet.Auto)]
 		static extern uint GetCurrentProcessId();
 
@@ -123,6 +120,7 @@ namespace antinet {
 		/// <summary>
 		/// Must be called to initialize anti-managed debugger code
 		/// </summary>
+		/// <returns><c>true</c> if successful, <c>false</c> otherwise</returns>
 		public unsafe static bool Initialize() {
 			var info = GetInfo();
 			var pDebuggerRCThread = FindDebuggerRCThreadAddress(info);
@@ -159,10 +157,9 @@ namespace antinet {
 			uint pid = GetCurrentProcessId();
 
 			try {
-				IntPtr clrAddr = GetCLR();
-				if (clrAddr == IntPtr.Zero)
+				var peInfo = PEInfo.GetCLR();
+				if (peInfo == null)
 					return IntPtr.Zero;
-				var peInfo = new PEInfo(clrAddr);
 
 				IntPtr sectionAddr;
 				uint sectionSize;
@@ -179,7 +176,7 @@ namespace antinet {
 
 					try {
 						// All allocations are pointer-size aligned
-						if (!IsAlignedPointer(pDebugger))
+						if (!PEInfo.IsAlignedPointer(pDebugger))
 							continue;
 
 						// Make sure pid is correct
@@ -190,7 +187,7 @@ namespace antinet {
 						IntPtr pDebuggerRCThread = *(IntPtr*)((byte*)pDebugger + info.Debugger_pDebuggerRCThread);
 
 						// All allocations are pointer-size aligned
-						if (!IsAlignedPointer(pDebuggerRCThread))
+						if (!PEInfo.IsAlignedPointer(pDebuggerRCThread))
 							continue;
 
 						// Make sure it points back to Debugger
@@ -208,16 +205,6 @@ namespace antinet {
 			}
 
 			return IntPtr.Zero;
-		}
-
-		static bool IsAlignedPointer(IntPtr addr) {
-			return (addr.ToInt64() & (IntPtr.Size - 1)) == 0;
-		}
-
-		static IntPtr GetCLR() {
-			if (Environment.Version.Major == 2)
-				return GetModuleHandle("mscorwks");
-			return GetModuleHandle("clr");
 		}
 	}
 }

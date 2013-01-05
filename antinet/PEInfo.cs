@@ -6,6 +6,7 @@
  */
 
 using System;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace antinet {
@@ -14,6 +15,26 @@ namespace antinet {
 		IntPtr imageEnd;
 		IntPtr sectionsAddr;
 		int numSects;
+
+		[DllImport("kernel32", CharSet = CharSet.Auto)]
+		static extern IntPtr GetModuleHandle(string name);
+
+		/// <summary>
+		/// Creates a <see cref="PEInfo"/> instance loaded from the CLR (clr.dll / mscorwks.dll)
+		/// </summary>
+		/// <returns>The new instance or <c>null</c> if we failed</returns>
+		public static PEInfo GetCLR() {
+			var clrAddr = GetCLRAddress();
+			if (clrAddr == IntPtr.Zero)
+				return null;
+			return new PEInfo(clrAddr);
+		}
+
+		static IntPtr GetCLRAddress() {
+			if (Environment.Version.Major == 2)
+				return GetModuleHandle("mscorwks");
+			return GetModuleHandle("clr");
+		}
 
 		/// <summary>
 		/// Constructor
@@ -115,6 +136,23 @@ namespace antinet {
 				sectionName++;
 			}
 			return true;
+		}
+
+		/// <summary>
+		/// Checks whether a pointer is aligned
+		/// </summary>
+		/// <param name="addr">Address</param>
+		public static bool IsAlignedPointer(IntPtr addr) {
+			return ((int)addr.ToInt64() & (IntPtr.Size - 1)) == 0;
+		}
+
+		/// <summary>
+		/// Checks whether a pointer is aligned
+		/// </summary>
+		/// <param name="addr">Address</param>
+		/// <param name="alignment">Alignment</param>
+		public static bool IsAligned(IntPtr addr, uint alignment) {
+			return ((uint)addr.ToInt64() & (alignment - 1)) == 0;
 		}
 
 		/// <inheritdoc/>
