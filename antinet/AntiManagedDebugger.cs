@@ -15,13 +15,18 @@ using System.Security;
 
 namespace antinet {
 	/// <summary>
-	/// This class will make sure that no managed .NET debugger can connect and
+	/// This class will make sure that no managed .NET debugger can attach and
 	/// debug this .NET process. This code assumes that it's Microsoft's .NET
 	/// implementation (for the desktop) that is used. The only currently supported
 	/// versions are .NET Framework 2.0 - 4.5 (CLR 2.0 and CLR 4.0).
 	/// It prevents debugging by killing the .NET debugger thread. When it's killed,
-	/// any connected managed debugger, or any managed debugger that connects, will
-	/// fail to receive any debug messages.
+	/// any attached managed debugger, or any managed debugger that attaches, will
+	/// fail to send and receive any .NET debug messages. If a debugger is attached,
+	/// <c>Debugger.IsAttached</c> will still return <c>true</c> but that doesn't mean
+	/// the debugger is working. It's just that the debugger flag isn't reset by our code.
+	/// If a debugger is attached before this code is executed, the process could hang at
+	/// some later time when this process is trying to send a debug message to the debugger.
+	/// Clearing the debug flag could possibly solve this if you don't want it to hang.
 	/// </summary>
 	public static class AntiManagedDebugger {
 		[DllImport("kernel32", CharSet = CharSet.Auto)]
@@ -50,6 +55,12 @@ namespace antinet {
 			public int DebuggerRCThread_pDebugger;
 
 			/// <summary>
+			/// Offset in <c>DebuggerRCThread</c> of pointer to <c>DebuggerIPCControlBlock</c>.
+			/// See <c>DebuggerRCThread::Start() after it creates the thread.</c>.
+			/// </summary>
+			public int DebuggerRCThread_pDebuggerIPCControlBlock;
+
+			/// <summary>
 			/// Offset in <c>DebuggerRCThread</c> of keep-looping boolean (1 byte).
 			/// See <c>Debugger::StopDebugger()</c> or one of the first methods it calls.
 			/// </summary>
@@ -69,6 +80,7 @@ namespace antinet {
 			Debugger_pDebuggerRCThread = 4,
 			Debugger_pid = 8,
 			DebuggerRCThread_pDebugger = 0x30,
+			DebuggerRCThread_pDebuggerIPCControlBlock = 0x34,
 			DebuggerRCThread_shouldKeepLooping = 0x3C,
 			DebuggerRCThread_hEvent1 = 0x40,
 		};
@@ -80,6 +92,7 @@ namespace antinet {
 			Debugger_pDebuggerRCThread = 8,
 			Debugger_pid = 0x10,
 			DebuggerRCThread_pDebugger = 0x58,
+			DebuggerRCThread_pDebuggerIPCControlBlock = 0x60,
 			DebuggerRCThread_shouldKeepLooping = 0x70,
 			DebuggerRCThread_hEvent1 = 0x78,
 		};
@@ -91,6 +104,7 @@ namespace antinet {
 			Debugger_pDebuggerRCThread = 8,
 			Debugger_pid = 0xC,
 			DebuggerRCThread_pDebugger = 0x34,
+			DebuggerRCThread_pDebuggerIPCControlBlock = 0x38,
 			DebuggerRCThread_shouldKeepLooping = 0x40,
 			DebuggerRCThread_hEvent1 = 0x44,
 		};
@@ -102,6 +116,7 @@ namespace antinet {
 			Debugger_pDebuggerRCThread = 8,
 			Debugger_pid = 0xC,
 			DebuggerRCThread_pDebugger = 0x30,
+			DebuggerRCThread_pDebuggerIPCControlBlock = 0x34,
 			DebuggerRCThread_shouldKeepLooping = 0x3C,
 			DebuggerRCThread_hEvent1 = 0x40,
 		};
@@ -113,6 +128,7 @@ namespace antinet {
 			Debugger_pDebuggerRCThread = 0x10,
 			Debugger_pid = 0x18,
 			DebuggerRCThread_pDebugger = 0x58,
+			DebuggerRCThread_pDebuggerIPCControlBlock = 0x60,
 			DebuggerRCThread_shouldKeepLooping = 0x70,
 			DebuggerRCThread_hEvent1 = 0x78,
 		};
@@ -127,10 +143,23 @@ namespace antinet {
 			if (pDebuggerRCThread == IntPtr.Zero)
 				return false;
 
+			// This isn't needed but it will at least stop debuggers from attaching.
+			// Even if they did attach, they wouldn't get any messages since the debugger
+			// thread has exited. A user who tries to attach will be greeted with an
+			// "unable to attach due to different versions etc" message. This will not stop
+			// already attached debuggers. Killing the debugger thread will.
+			byte* pDebuggerIPCControlBlock = (byte*)*(IntPtr*)((byte*)pDebuggerRCThread + info.DebuggerRCThread_pDebuggerIPCControlBlock);
+			if (Environment.Version.Major == 2)
+				pDebuggerIPCControlBlock = (byte*)*(IntPtr*)pDebuggerIPCControlBlock;
+			// Set size field to 0. mscordbi!CordbProcess::VerifyControlBlock() will fail
+			// when it detects an unknown size.
+			*(uint*)pDebuggerIPCControlBlock = 0;
+
 			// Signal debugger thread to exit
 			*((byte*)pDebuggerRCThread + info.DebuggerRCThread_shouldKeepLooping) = 0;
 			IntPtr hEvent = *(IntPtr*)((byte*)pDebuggerRCThread + info.DebuggerRCThread_hEvent1);
 			SetEvent(hEvent);
+
 			return true;
 		}
 
@@ -151,7 +180,7 @@ namespace antinet {
 		/// <summary>
 		/// Tries to find the address of the <c>DebuggerRCThread</c> instance in memory
 		/// </summary>
-		/// <param name="info">The info we need</param>
+		/// <param name="info">The debugger info we need</param>
 		[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
 		static unsafe IntPtr FindDebuggerRCThreadAddress(Info info) {
 			uint pid = GetCurrentProcessId();
