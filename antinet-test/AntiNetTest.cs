@@ -2,6 +2,7 @@
 // This is in the public domain
 
 using System;
+using System.Diagnostics;
 using antinet;
 
 namespace antinet_test {
@@ -14,6 +15,7 @@ namespace antinet_test {
 			Console.WriteLine();
 
 			Console.WriteLine("Press any key to install anti-managed debugger and anti-managed profiler code...");
+			Console.WriteLine("Debugger.IsAttached: {0}", Debugger.IsAttached);
 			Console.ReadKey();
 			Console.WriteLine(sep);
 
@@ -35,12 +37,14 @@ namespace antinet_test {
 
 			Console.WriteLine("Try to attach a managed debugger/profiler or do it before this program starts.");
 			Console.WriteLine("Check whether you can set breakpoints, step over code, etc... :)");
+			Console.WriteLine("Debugger.IsAttached: {0}", Debugger.IsAttached);
 			ReportProfilerInfo();
 			Console.WriteLine("Press any key to exit...");
 			Console.ReadKey();
 			Console.WriteLine(sep);
 			GenerateProfilerEvents();
 
+			Console.WriteLine("Debugger.IsAttached: {0}", Debugger.IsAttached);
 			Console.WriteLine("Let's exit. Press any key (again!)...");
 			ReportProfilerInfo();
 			Console.ReadKey();
