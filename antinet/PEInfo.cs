@@ -1,7 +1,6 @@
 ﻿/*
- * This code was written by de4dot@gmail.com but is placed in the public domain.
- * Use at your own risk. You don't need to credit me, but it wouldn't hurt either. :)
- * 
+ * PE helper code. Written by de4dot@gmail.com
+ * This code is in the public domain.
  * Official site: https://bitbucket.org/0xd4d/antinet
  */
 
