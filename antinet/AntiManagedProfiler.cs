@@ -229,7 +229,8 @@ namespace antinet {
 					// AttachThreadAlwaysOn CLR option is enabled or some profiler has just
 					// attached or is attaching.
 
-					//TODO:
+					// TODO: It's possible to force the thread to exit (and close the named pipe)
+					// but it requires a lot more code and memory patching.
 				}
 			}
 
