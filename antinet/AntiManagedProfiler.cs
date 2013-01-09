@@ -280,6 +280,8 @@ namespace antinet {
 					// again but this time, its timeout value will be 0, and it will fail. Since
 					// the thread can now exit, it will exit and close its named pipe.
 					using (var hPipe = CreatePipeFileHandleWait()) {
+						if (hPipe == null)
+							return false;
 						if (hPipe.IsInvalid)
 							return false;
 					}
