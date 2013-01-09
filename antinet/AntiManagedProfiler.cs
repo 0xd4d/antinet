@@ -377,7 +377,7 @@ namespace antinet {
 			}
 
 			/// <summary>
-			/// Finds the address of clr!s_attachThreadingMode
+			/// Finds the address of clr!ProfilingAPIAttachDetach::s_attachThreadingMode
 			/// </summary>
 			/// <returns>The address or <c>null</c> if none was found</returns>
 			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
