@@ -318,21 +318,20 @@ namespace antinet {
 
 				}
 				finally {
-					VirtualProtect(timeOutOptionAddr, IntPtr.Size, oldProtect, out oldProtect);
+					VirtualProtect(timeOutOptionAddr, (int)ConfigDWORDInfo_defValue + 4, oldProtect, out oldProtect);
 				}
 
 				// Rename the option to make sure the user can't override the value
 				char* name = *(char**)((byte*)timeOutOptionAddr + ConfigDWORDInfo_name);
-				VirtualProtect(new IntPtr(name), ProfAPIMaxWaitForTriggerMs_name.Length * 2, PAGE_EXECUTE_READWRITE, out oldProtect);
+				IntPtr nameAddr = new IntPtr(name);
+				VirtualProtect(nameAddr, ProfAPIMaxWaitForTriggerMs_name.Length * 2, PAGE_EXECUTE_READWRITE, out oldProtect);
 				try {
 					var rand = new Random();
-					while (*name != 0) {
-						*name = (char)rand.Next(1, ushort.MaxValue);
-						name++;
-					}
+					for (int i = 0; i < ProfAPIMaxWaitForTriggerMs_name.Length; i++)
+						name[i] = (char)rand.Next(1, ushort.MaxValue);
 				}
 				finally {
-					VirtualProtect(timeOutOptionAddr, IntPtr.Size, oldProtect, out oldProtect);
+					VirtualProtect(nameAddr, IntPtr.Size, oldProtect, out oldProtect);
 				}
 			}
 
