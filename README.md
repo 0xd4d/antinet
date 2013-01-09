@@ -13,10 +13,25 @@ Tested versions of the CLR:
 
 CLR 2.0 is used by .NET Framework 2.0 - 3.5. CLR 4.0 is used by .NET Framework 4.0 - 4.5.
 
+There are four test executables, one for each combination of CLR major version and x86/x64 architecture. You can try attaching a managed debugger/profiler at various points, eg. at startup, after the program has started but before it has initialized the anti-managed debugger/profiler code, and after it has initialized the anti-managed debugger/profiler code.
+
+Managed debuggers you can try:
+
+* Visual Studio's .NET debugger
+* [mdbg](http://www.microsoft.com/en-us/download/details.aspx?id=19621)
+
+Managed profilers:
+
+* [CLR Profiler for .NET Framework 4](http://www.microsoft.com/en-us/download/details.aspx?id=16273) (CLR 2.0 and CLR 4.0)
+* [CLR Profiler for .NET Framework 2](http://www.microsoft.com/en-us/download/details.aspx?id=13382) (CLR 2.0)
+* Or any other profiler you can find
+
+After the test executable has initialized the anti-managed profiler code and you press any key, it will generate some profiler events. 10,000 exception instances will be allocated, thrown and caught. If you check the profiler's log, you won't see these at all. You'll only see the events it received before the anti-managed profiler code was initialized.
+
 Anti-managed debugger
 =====================
 
-Most anti-managed debugger code call `System.Diagnostics.Debugger.IsAttached` to check whether a managed debugger is present. This code doesn't do that. Instead, it prevents any managed .NET debugger from working by killing the .NET debugger thread. When this thread is killed, no managed .NET debugger can get any debug messages and will fail to work.
+Most anti-managed debugger code will call `System.Diagnostics.Debugger.IsAttached` somewhere in `Main()` to check whether a managed debugger is present. This code doesn't do that. Instead, it prevents any managed .NET debugger from working by killing the .NET debugger thread. When this thread is killed, no managed .NET debugger can get any debug messages and will fail to work.
 
 Note that it doesn't prevent non-managed debuggers from working (eg. `WinDbg` or `OllyDbg`). Non-managed debuggers can't debug managed code the way a managed debugger can. Debugging managed code using a non-managed debugger is not easy.
 
@@ -33,7 +48,7 @@ The `DebuggerRCThread` instance also has a pointer back to the `Debugger` instan
 
 Once we have the `DebuggerRCThread` instance, it's trivial to clear the keep-looping variable and signal the event so it wakes up and exits.
 
-To prevent a debugger from attaching, one can clear the debugger IPC block's size field. If this is not an expected value, mscordbi will return an error and no debugger is able to attach.
+To prevent a debugger from attaching, one can clear the debugger IPC block's size field. If this is not an expected value, `CordbProcess::VerifyControlBlock()` in `mscordbi.dll` will return an error and no debugger is able to attach.
 
 Anti-managed profiler
 =====================
