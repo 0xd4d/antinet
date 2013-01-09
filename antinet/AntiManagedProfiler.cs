@@ -47,7 +47,8 @@ namespace antinet {
 	/// You can change this value with the ProfAPIMaxWaitForTriggerMs option (dword in registry)
 	/// or COMPlus_ProfAPIMaxWaitForTriggerMs environment value. If the AttachThreadAlwaysOn
 	/// option (COMPlus_AttachThreadAlwaysOn env value) is enabled, the attach thread will
-	/// never exit and the named pipe is never closed.
+	/// never exit and the named pipe is never closed. It's possible to close the thread and
+	/// the named pipe, but it requires more memory patching. See the code for details.
 	/// </para>
 	/// </remarks>
 	public static class AntiManagedProfiler {
@@ -161,13 +162,37 @@ namespace antinet {
 		}
 
 		class ProfilerDetectorCLR40 : IProfilerDetector {
+			const uint PIPE_ACCESS_DUPLEX = 3;
+			const uint PIPE_TYPE_MESSAGE = 4;
+			const uint PIPE_READMODE_MESSAGE = 2;
+			const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+			const uint GENERIC_READ = 0x80000000;
+			const uint GENERIC_WRITE = 0x40000000;
+			const uint OPEN_EXISTING = 3;
+			const uint PAGE_EXECUTE_READWRITE = 0x40;
+
 			[DllImport("kernel32", CharSet = CharSet.Auto)]
 			static extern uint GetCurrentProcessId();
+
+			[DllImport("kernel32", CharSet = CharSet.Auto)]
+			static extern void Sleep(uint dwMilliseconds);
 
 			[DllImport("kernel32", SetLastError = true)]
 			static extern SafeFileHandle CreateNamedPipe(string lpName, uint dwOpenMode,
 			   uint dwPipeMode, uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize,
 			   uint nDefaultTimeOut, IntPtr lpSecurityAttributes);
+
+			[DllImport("kernel32", SetLastError = true, CharSet = CharSet.Auto)]
+			static extern SafeFileHandle CreateFile(string lpFileName, uint dwDesiredAccess,
+			   uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+			   uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+			[DllImport("kernel32")]
+			static extern bool VirtualProtect(IntPtr lpAddress, int dwSize, uint flNewProtect, out uint lpflOldProtect);
+
+			const uint ConfigDWORDInfo_name = 0;
+			static readonly uint ConfigDWORDInfo_defValue = (uint)IntPtr.Size;
+			const string ProfAPIMaxWaitForTriggerMs_name = "ProfAPIMaxWaitForTriggerMs";
 
 			/// <summary>
 			/// Address of the profiler control block. Only some fields are interesting and
@@ -206,32 +231,327 @@ namespace antinet {
 
 			public bool Initialize() {
 				bool result = FindProfilerControlBlock();
-				TakeOwnershipOfNamedPipe();
+				result &= TakeOwnershipOfNamedPipe() || CreateNamedPipe();
 				wasAttached = IsProfilerAttached;
 				return result;
 			}
 
-			void TakeOwnershipOfNamedPipe() {
-				string pipeName = string.Format(@"\\.\pipe\CPFATP_{0}_v{1}.{2}.{3}",
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			unsafe bool TakeOwnershipOfNamedPipe() {
+				try {
+					if (CreateNamedPipe())
+						return true;
+
+					// The CLR has already created the named pipe. Either the AttachThreadAlwaysOn
+					// CLR option is enabled or some profiler has just attached or is attaching.
+					// We must force it to exit its loop. There are two options that can prevent
+					// it from exiting the thread, AttachThreadAlwaysOn and
+					// ProfAPIMaxWaitForTriggerMs. If AttachThreadAlwaysOn is enabled, the thread
+					// is started immediately when the CLR is loaded and it never exits.
+					// ProfAPIMaxWaitForTriggerMs is the timeout in ms to use when waiting on
+					// client attach messages. A user could set this to FFFFFFFF which is equal
+					// to the INFINITE constant.
+					//
+					// To force it to exit, we must do this:
+					//	- Find clr!ProfilingAPIAttachDetach::s_attachThreadingMode and make sure
+					//	  it's not 2 (AttachThreadAlwaysOn is enabled).
+					//	- Find clr!EXTERNAL_ProfAPIMaxWaitForTriggerMs and:
+					//		- Set its default value to 0
+					//		- Rename the option so the user can't override it
+					//	- Open the named pipe to wake it up and then close the file to force a
+					//	  timeout error.
+					//	- Wait a little while until the thread has exited
+
+					IntPtr threadingModeAddr = FindThreadingModeAddress();
+					IntPtr timeOutOptionAddr = FindTimeOutOptionAddress();
+
+					if (timeOutOptionAddr == IntPtr.Zero)
+						return false;
+
+					// Make sure the thread can exit. If this value is 2, it will never exit.
+					if (threadingModeAddr != IntPtr.Zero && *(uint*)threadingModeAddr == 2)
+						*(uint*)threadingModeAddr = 1;
+
+					// Set default timeout to 0 and rename timeout option
+					FixTimeOutOption(timeOutOptionAddr);
+
+					// Wake up clr!ProfilingAPIAttachServer::ConnectToClient(). We immediately
+					// close the pipe so it will fail to read any data. It will then start over
+					// again but this time, its timeout value will be 0, and it will fail. Since
+					// the thread can now exit, it will exit and close its named pipe.
+					using (var hPipe = CreatePipeFileHandleWait()) {
+						if (hPipe.IsInvalid)
+							return false;
+					}
+
+					return CreateNamedPipeWait();
+				}
+				catch {
+				}
+				return false;
+			}
+
+			bool CreateNamedPipeWait() {
+				int timeLeft = 100;
+				const int waitTime = 5;
+				while (timeLeft > 0) {
+					if (CreateNamedPipe())
+						return true;
+					Sleep(waitTime);
+					timeLeft -= waitTime;
+				}
+				return CreateNamedPipe();
+			}
+
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			unsafe static void FixTimeOutOption(IntPtr timeOutOptionAddr) {
+				if (timeOutOptionAddr == IntPtr.Zero)
+					return;
+
+				uint oldProtect;
+				VirtualProtect(timeOutOptionAddr, (int)ConfigDWORDInfo_defValue + 4, PAGE_EXECUTE_READWRITE, out oldProtect);
+				try {
+					// Set default timeout to 0 to make sure it fails immediately
+					*(uint*)((byte*)timeOutOptionAddr + ConfigDWORDInfo_defValue) = 0;
+
+				}
+				finally {
+					VirtualProtect(timeOutOptionAddr, IntPtr.Size, oldProtect, out oldProtect);
+				}
+
+				// Rename the option to make sure the user can't override the value
+				char* name = *(char**)((byte*)timeOutOptionAddr + ConfigDWORDInfo_name);
+				VirtualProtect(new IntPtr(name), ProfAPIMaxWaitForTriggerMs_name.Length * 2, PAGE_EXECUTE_READWRITE, out oldProtect);
+				try {
+					var rand = new Random();
+					while (*name != 0) {
+						*name = (char)rand.Next(1, ushort.MaxValue);
+						name++;
+					}
+				}
+				finally {
+					VirtualProtect(timeOutOptionAddr, IntPtr.Size, oldProtect, out oldProtect);
+				}
+			}
+
+			SafeFileHandle CreatePipeFileHandleWait() {
+				int timeLeft = 100;
+				const int waitTime = 5;
+				while (timeLeft > 0) {
+					if (CreateNamedPipe())
+						return null;
+					var hFile = CreatePipeFileHandle();
+					if (!hFile.IsInvalid)
+						return hFile;
+					Sleep(waitTime);
+					timeLeft -= waitTime;
+				}
+				return CreatePipeFileHandle();
+			}
+
+			static SafeFileHandle CreatePipeFileHandle() {
+				return CreateFile(GetPipeName(), GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
+			}
+
+			static string GetPipeName() {
+				return string.Format(@"\\.\pipe\CPFATP_{0}_v{1}.{2}.{3}",
 							GetCurrentProcessId(), Environment.Version.Major,
 							Environment.Version.Minor, Environment.Version.Build);
-				profilerPipe = CreateNamedPipe(pipeName,
-											0x40000003,	// FILE_FLAG_OVERLAPPED | PIPE_ACCESS_DUPLEX
-											6,			// PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE
+			}
+
+			bool CreateNamedPipe() {
+				if (profilerPipe != null && !profilerPipe.IsInvalid)
+					return true;
+
+				profilerPipe = CreateNamedPipe(GetPipeName(),
+											FILE_FLAG_OVERLAPPED | PIPE_ACCESS_DUPLEX,
+											PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE,
 											1,			// nMaxInstances
 											0x24,		// nOutBufferSize
 											0x338,		// nInBufferSize
 											1000,		// nDefaultTimeOut
 											IntPtr.Zero);	// lpSecurityAttributes
 
-				if (profilerPipe.IsInvalid) {
-					// The CLR has already created the named pipe. Either the
-					// AttachThreadAlwaysOn CLR option is enabled or some profiler has just
-					// attached or is attaching.
+				return !profilerPipe.IsInvalid;
+			}
 
-					// TODO: It's possible to force the thread to exit (and close the named pipe)
-					// but it requires a lot more code and memory patching.
+			/// <summary>
+			/// Finds the address of clr!s_attachThreadingMode
+			/// </summary>
+			/// <returns>The address or <c>null</c> if none was found</returns>
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			static unsafe IntPtr FindThreadingModeAddress() {
+				try {
+					// Find this code in clr!ProfilingAPIAttachServer::ExecutePipeRequests()
+					//	83 3D XX XX XX XX 02	cmp dword ptr [mem],2
+					//	74 / 0F 84 XX			je there
+					//	83 E8+r 00 / 85 C0+rr	sub reg,0 / test reg,reg
+					//	74 / 0F 84 XX			je there
+					//	48+r / FF C8+r			dec reg
+					//	74 / 0F 84 XX			je there
+					//	48+r / FF C8+r			dec reg
+
+					var peInfo = PEInfo.GetCLR();
+					if (peInfo == null)
+						return IntPtr.Zero;
+
+					IntPtr sectionAddr;
+					uint sectionSize;
+					if (!peInfo.FindSection(".text", out sectionAddr, out sectionSize))
+						return IntPtr.Zero;
+
+					byte* ptr = (byte*)sectionAddr;
+					byte* end = (byte*)sectionAddr + sectionSize;
+					for (; ptr < end; ptr++) {
+						IntPtr addr;
+
+						try {
+							//	83 3D XX XX XX XX 02	cmp dword ptr [mem],2
+							byte* p = ptr;
+							if (*p != 0x83 || p[1] != 0x3D || p[6] != 2)
+								continue;
+							if (IntPtr.Size == 4)
+								addr = new IntPtr((void*)*(uint*)(p + 2));
+							else
+								addr = new IntPtr((void*)(p + 7 + *(int*)(p + 2)));
+							if (!PEInfo.IsAligned(addr, 4))
+								continue;
+							if (!peInfo.IsValidImageAddress(addr))
+								continue;
+							p += 7;
+
+							// 1 = normal lazy thread creation. 2 = thread is always present
+							if (*(uint*)addr < 1 || *(uint*)addr > 2)
+								continue;
+							*(uint*)addr = *(uint*)addr;
+
+							//	74 / 0F 84 XX			je there
+							if (!NextJz(ref p))
+								continue;
+
+							//	83 E8+r 00 / 85 C0+rr	sub reg,0 / test reg,reg
+							SkipRex(ref p);
+							if (*p == 0x83 && p[2] == 0) {
+								if ((uint)(p[1] - 0xE8) > 7)
+									continue;
+								p += 3;
+							}
+							else if (*p == 0x85) {
+								int reg = (p[1] >> 3) & 7;
+								int rm = p[1] & 7;
+								if (reg != rm)
+									continue;
+								p += 2;
+							}
+							else
+								continue;
+
+							//	74 / 0F 84 XX			je there
+							if (!NextJz(ref p))
+								continue;
+
+							//	48+r / FF C8+r			dec reg
+							if (!SkipDecReg(ref p))
+								continue;
+
+							//	74 / 0F 84 XX			je there
+							if (!NextJz(ref p))
+								continue;
+
+							//	48+r / FF C8+r			dec reg
+							if (!SkipDecReg(ref p))
+								continue;
+
+							return addr;
+						}
+						catch {
+						}
+					}
 				}
+				catch {
+				}
+				return IntPtr.Zero;
+			}
+
+			/// <summary>
+			/// Finds the address of clr!EXTERNAL_ProfAPIMaxWaitForTriggerMs
+			/// </summary>
+			/// <returns>The address or <c>null</c> if none was found</returns>
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			static unsafe IntPtr FindTimeOutOptionAddress() {
+				try {
+					var peInfo = PEInfo.GetCLR();
+					if (peInfo == null)
+						return IntPtr.Zero;
+
+					IntPtr sectionAddr;
+					uint sectionSize;
+					if (!peInfo.FindSection(".rdata", out sectionAddr, out sectionSize) &&
+						!peInfo.FindSection(".text", out sectionAddr, out sectionSize))
+						return IntPtr.Zero;
+
+					byte* p = (byte*)sectionAddr;
+					byte* end = (byte*)sectionAddr + sectionSize;
+					for (; p < end; p++) {
+						try {
+							char* name = *(char**)(p + ConfigDWORDInfo_name);
+							if (!PEInfo.IsAligned(new IntPtr(name), 2))
+								continue;
+							if (!peInfo.IsValidImageAddress(name))
+								continue;
+
+							if (!Equals(name, ProfAPIMaxWaitForTriggerMs_name))
+								continue;
+
+							return new IntPtr(p);
+						}
+						catch {
+						}
+					}
+				}
+				catch {
+				}
+				return IntPtr.Zero;
+			}
+
+			unsafe static bool Equals(char* s1, string s2) {
+				for (int i = 0; i < s2.Length; i++) {
+					if (char.ToUpperInvariant(s1[i]) != char.ToUpperInvariant(s2[i]))
+						return false;
+				}
+				return s1[s2.Length] == 0;
+			}
+
+			unsafe static void SkipRex(ref byte* p) {
+				if (IntPtr.Size != 8)
+					return;
+				if (*p >= 0x48 && *p <= 0x4F)
+					p++;
+			}
+
+			unsafe static bool SkipDecReg(ref byte* p) {
+				SkipRex(ref p);
+				if (IntPtr.Size == 4 && *p >= 0x48 && *p <= 0x4F)
+					p++;
+				else if (*p == 0xFF && p[1] >= 0xC8 && p[1] <= 0xCF)
+					p += 2;
+				else
+					return false;
+				return true;
+			}
+
+			unsafe static bool NextJz(ref byte* p) {
+				if (*p == 0x74) {
+					p += 2;
+					return true;
+				}
+
+				if (*p == 0x0F && p[1] == 0x84) {
+					p += 6;
+					return true;
+				}
+
+				return false;
 			}
 
 			/// <summary>
