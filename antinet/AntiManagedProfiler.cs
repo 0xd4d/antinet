@@ -204,7 +204,7 @@ namespace antinet {
 			/// uint profilerStatus
 			/// </code>
 			/// 
-			/// <c>profilerStatus</c> is <c>0</c> when no profiler is attacheded. Any other value
+			/// <c>profilerStatus</c> is <c>0</c> when no profiler is attached. Any other value
 			/// indicates that a profiler is attached, attaching, or detaching. It's <c>4</c>
 			/// when a profiler is attached. When it's attached, it will receive messages from
 			/// the CLR.
