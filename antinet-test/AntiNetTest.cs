@@ -16,7 +16,7 @@ namespace antinet_test {
 
 			Console.WriteLine("Profiler attached: can't determine that yet");
 			Console.WriteLine("Debugger.IsAttached: {0}", Debugger.IsAttached);
-			Console.WriteLine("Press any key to install anti-managed debugger and anti-managed profiler code...");
+			Console.WriteLine("Press any key to initialize anti-managed debugger/profiler code...");
 			Console.ReadKey();
 			Console.WriteLine(sep);
 
