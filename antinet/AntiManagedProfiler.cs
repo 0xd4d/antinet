@@ -50,6 +50,13 @@ namespace antinet {
 	/// never exit and the named pipe is never closed. It's possible to close the thread and
 	/// the named pipe, but it requires more memory patching. See the code for details.
 	/// </para>
+	/// <para>
+	/// A user could close the named pipe handle, so we must also patch the thread proc so
+	/// it always returns immediately. Only patching the thread proc and not taking ownership
+	/// of the named pipe isn't good enough. If we own the named pipe, we know that the attacher
+	/// thread has exited. Once we've patched the thread proc, we don't really need the named
+	/// pipe anymore.
+	/// </para>
 	/// </remarks>
 	public static class AntiManagedProfiler {
 		static IProfilerDetector profilerDetector;
@@ -232,6 +239,7 @@ namespace antinet {
 			public bool Initialize() {
 				bool result = FindProfilerControlBlock();
 				result &= TakeOwnershipOfNamedPipe() || CreateNamedPipe();
+				result &= PatchAttacherThreadProc();
 				wasAttached = IsProfilerAttached;
 				return result;
 			}
@@ -552,6 +560,144 @@ namespace antinet {
 					return true;
 				}
 
+				return false;
+			}
+
+			/// <summary>
+			/// Finds the attacher thread's thread proc and patches it so it returns immediately.
+			/// </summary>
+			/// <returns><c>true</c> if it was patched, <c>false</c> otherwise</returns>
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			unsafe bool PatchAttacherThreadProc() {
+				IntPtr threadProc = FindAttacherThreadProc();
+				if (threadProc == IntPtr.Zero)
+					return false;
+
+				byte* p = (byte*)threadProc;
+				uint oldProtect;
+				VirtualProtect(new IntPtr(p), 5, PAGE_EXECUTE_READWRITE, out oldProtect);
+				try {
+					if (IntPtr.Size == 4) {
+						// xor eax,eax
+						p[0] = 0x33; p[1] = 0xC0;
+						// retn 4
+						p[2] = 0xC2; p[3] = 0x04; p[4] = 0x00;
+					}
+					else {
+						// xor eax,eax
+						p[0] = 0x33; p[1] = 0xC0;
+						// retn
+						p[2] = 0xC3;
+					}
+				}
+				finally {
+					VirtualProtect(new IntPtr(p), 5, oldProtect, out oldProtect);
+				}
+				return true;
+			}
+
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			unsafe IntPtr FindAttacherThreadProc() {
+				try {
+					var peInfo = PEInfo.GetCLR();
+					if (peInfo == null)
+						return IntPtr.Zero;
+
+					IntPtr sectionAddr;
+					uint sectionSize;
+					if (!peInfo.FindSection(".text", out sectionAddr, out sectionSize))
+						return IntPtr.Zero;
+
+					byte* p = (byte*)sectionAddr;
+					byte* start = p;
+					byte* end = (byte*)sectionAddr + sectionSize;
+
+					if (IntPtr.Size == 4) {
+						for (; p < end; p++) {
+							// Find this code:
+							//	50+r				push reg
+							//	50+r				push reg
+							//	50+r				push reg
+							//	68 XX XX XX XX		push offset ThreadProc
+							//	50+r				push reg
+							//	50+r				push reg
+							//	FF 15 XX XX XX XX	call dword ptr [mem] // CreateThread()
+
+							byte push = *p;
+							if (push < 0x50 || push > 0x57)
+								continue;
+							if (p[1] != push || p[2] != push || p[8] != push || p[9] != push)
+								continue;
+							if (p[3] != 0x68)
+								continue;
+							if (p[10] != 0xFF || p[11] != 0x15)
+								continue;
+
+							IntPtr threadProc = new IntPtr((void*)*(uint*)(p + 4));
+							if (!CheckThreadProc(start, end, threadProc))
+								continue;
+
+							return threadProc;
+						}
+					}
+					else {
+						for (; p < end; p++) {
+							// Find this code:
+							//	45 33 C9				xor r9d,r9d
+							//	4C 8D 05 XX XX XX XX	lea r8,ThreadProc
+							//	33 D2					xor edx,edx
+							//	33 C9					xor ecx,ecx
+							//	FF 15 XX XX XX XX		call dword ptr [mem] // CreateThread()
+
+							if (*p != 0x45 && p[1] != 0x33 && p[2] != 0xC9)
+								continue;
+							if (p[3] != 0x4C && p[4] != 0x8D && p[5] != 0x05)
+								continue;
+							if (p[10] != 0x33 && p[11] != 0xD2)
+								continue;
+							if (p[12] != 0x33 && p[13] != 0xC9)
+								continue;
+							if (p[14] != 0xFF && p[15] != 0x15)
+								continue;
+
+							IntPtr threadProc = new IntPtr(p + 10 + *(int*)(p + 6));
+							if (!CheckThreadProc(start, end, threadProc))
+								continue;
+
+							return threadProc;
+						}
+					}
+				}
+				catch {
+				}
+
+				return IntPtr.Zero;
+			}
+
+			/// <summary>
+			/// Checks whether it appears to be the profiler attacher thread proc
+			/// </summary>
+			/// <param name="codeStart">Start of code</param>
+			/// <param name="codeEnd">End of code</param>
+			/// <param name="threadProc">Possible thread proc</param>
+			/// <returns><c>true</c> if it's probably the thread proc, <c>false</c> otherwise</returns>
+			[HandleProcessCorruptedStateExceptions, SecurityCritical]	// Req'd on .NET 4.0
+			unsafe static bool CheckThreadProc(byte* codeStart, byte* codeEnd, IntPtr threadProc) {
+				try {
+					byte* p = (byte*)threadProc;
+
+					// Must be in .text section
+					if (p < codeStart || p >= codeEnd)
+						return false;
+
+					// It has a constant that is present in the first N bytes
+					for (int i = 0; i < 0x20; i++) {
+						if (*(uint*)(p + i) == 0x4000)
+							return true;
+					}
+				}
+				catch {
+				}
 				return false;
 			}
 
