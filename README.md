@@ -6,7 +6,7 @@ It uses undocumented features of Microsoft's CLR to prevent managed debuggers/pr
 Tested versions of the CLR:
 
 * CLR 2.0.50727.42 (.NET 2.0 RTM) x86 and x64
-* CLR 2.0.50727.5466 (latest version as of today) x86 and x64
+* CLR 2.0.50727.5466 (latest .NET 3.5 release as of today) x86 and x64
 * CLR 4.0.30319.1 (.NET 4.0 RTM) x86 and x64
 * CLR 4.0.30319.17020 (.NET 4.5 Dev Preview) x86 and x64
 * CLR 4.0.30319.17929 (.NET 4.5 RTM) x86 and x64
